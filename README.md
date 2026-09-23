@@ -33,7 +33,7 @@ Architecture: gfx900
 VRAM: ~8176 MiB per GPU
 ```
 
-> **Note:** Vega 56 has been tested with this project. Vega 64 is currently a target platform but has not been tested by the author.
+> **Note:** Vega 56 has been tested with this project.
 
 ---
 
