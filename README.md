@@ -1,356 +1,576 @@
-<p align="center">
-  <a href="https://ollama.com">
-    <img src="https://github.com/ollama/ollama/assets/3325447/0d0b44e2-8f4a-4e99-9b52-a5c1c741c8f7" alt="ollama" width="200"/>
-  </a>
-</p>
+# Ollama Vega / gfx900
 
-# Ollama
+Experimental Ollama build for older AMD GPUs based on the **Vega 56 / Vega 64** architecture (`gfx900`).
 
-Start building with open models.
+This repository contains the changes and build configuration required to run Ollama's ROCm/HIP backend on AMD Vega GPUs that are no longer handled correctly by current stock Ollama ROCm builds.
 
-## Download
+> **Status:** Experimental
+> Tested hardware: **2× AMD Radeon RX Vega 56 8 GB**
 
-### macOS
+---
 
-```shell
-curl -fsSL https://ollama.com/install.sh | sh
+## Hardware
+
+Tested with:
+
+* 2× ASRock Phantom Gaming X Radeon RX Vega 56
+* 8 GB VRAM per GPU
+* AMD GPU architecture: `gfx900`
+* Linux
+* AMDGPU kernel driver
+* ROCm 6.1
+
+The setup is capable of using both GPUs for a single model.
+
+Example:
+
+```text
+GPU 0: Radeon RX Vega
+GPU 1: Radeon RX Vega
+Architecture: gfx900
+VRAM: ~8176 MiB per GPU
 ```
 
-or [download manually](https://ollama.com/download/Ollama.dmg)
+---
 
-### Windows
+## Why this fork?
 
-```shell
-irm https://ollama.com/install.ps1 | iex
+Recent Ollama releases use newer ROCm versions and GPU detection mechanisms that do not work correctly with older Vega GPUs in some configurations.
+
+On the tested system, stock Ollama detects the Vega GPUs but reports zero usable VRAM:
+
+```text
+skipping pseudo-device with zero memory
+initial_count=0
+inference compute id=cpu library=cpu
+vram-based default context total_vram="0 B"
 ```
 
-or [download manually](https://ollama.com/download/OllamaSetup.exe)
+As a result, Ollama falls back to CPU inference.
 
-### Linux
+This fork adds a compatibility workaround for the Vega/gfx900 platform.
 
-```shell
-curl -fsSL https://ollama.com/install.sh | sh
+---
+
+# Vega VRAM workaround
+
+The main compatibility problem is related to VRAM reporting.
+
+On the tested Vega/ROCm combination:
+
+```text
+hipMemGetInfo()
 ```
 
-[Manual install instructions](https://docs.ollama.com/linux#manual-install)
+does not reliably return usable VRAM information and can fail with:
 
-### Docker
-
-The official [Ollama Docker image](https://hub.docker.com/r/ollama/ollama) `ollama/ollama` is available on Docker Hub.
-
-### Libraries
-
-- [ollama-python](https://github.com/ollama/ollama-python)
-- [ollama-js](https://github.com/ollama/ollama-js)
-
-### Community
-
-- [Discord](https://discord.gg/ollama)
-- [𝕏 (Twitter)](https://x.com/ollama)
-- [Reddit](https://reddit.com/r/ollama)
-
-## Get started
-
-```
-ollama
+```text
+invalid argument
 ```
 
-You'll be prompted to run a model or connect Ollama to your existing agents or applications such as `Claude Code`, `OpenClaw`, `OpenCode` , `Codex`, `Copilot`,  and more.
+The workaround therefore uses:
 
-### Coding
+* HIP/CUDA device properties to determine total VRAM
+* Linux DRM sysfs to determine currently used VRAM
 
-To launch a specific integration:
+The used VRAM is obtained from:
 
-```
-ollama launch claude
-```
-
-Supported integrations include [Claude Code](https://docs.ollama.com/integrations/claude-code), [Codex](https://docs.ollama.com/integrations/codex), [Copilot CLI](https://docs.ollama.com/integrations/copilot-cli), [DeepSeek Harness](https://docs.ollama.com/integrations/deepseek-harness), [Droid](https://docs.ollama.com/integrations/droid), and [OpenCode](https://docs.ollama.com/integrations/opencode).
-
-### AI assistant
-
-Use [OpenClaw](https://docs.ollama.com/integrations/openclaw) to turn Ollama into a personal AI assistant across WhatsApp, Telegram, Slack, Discord, and more:
-
-```
-ollama launch openclaw
+```text
+/sys/class/drm/cardX/device/mem_info_vram_used
 ```
 
-### Chat with a model
+The available VRAM is then calculated as:
 
-Run and chat with [Gemma 4](https://ollama.com/library/gemma4):
-
-```
-ollama run gemma4
+```text
+free VRAM = total VRAM - used VRAM
 ```
 
-See [ollama.com/library](https://ollama.com/library) for the full list.
+The compatibility patch is located at:
 
-See the [quickstart guide](https://docs.ollama.com/quickstart) for more details.
-
-## REST API
-
-Ollama has a REST API for running and managing models.
-
-```
-curl http://localhost:11434/api/chat -d '{
-  "model": "gemma4",
-  "messages": [{
-    "role": "user",
-    "content": "Why is the sky blue?"
-  }],
-  "stream": false
-}'
+```text
+llama/compat/002-llama-cpp-vega-vram.patch
 ```
 
-See the [API documentation](https://docs.ollama.com/api) for all endpoints.
+Ollama's CMake build automatically applies patches from `llama/compat/`.
 
-### Python
+---
 
-```
-pip install ollama
-```
+# Requirements
 
-```python
-from ollama import chat
+The tested build environment uses:
 
-response = chat(model='gemma4', messages=[
-  {
-    'role': 'user',
-    'content': 'Why is the sky blue?',
-  },
-])
-print(response.message.content)
-```
+* Ubuntu 20.04
+* Linux kernel 5.4
+* ROCm 6.1
+* Go 1.26
+* CMake 3.31+
+* AMDGPU
+* AMD Vega GPU with `gfx900`
 
-### JavaScript
+The important ROCm paths in the tested environment are:
 
-```
-npm i ollama
+```text
+/opt/rocm-6.1.0
+/usr/local/go
+/opt/cmake
 ```
 
-```javascript
-import ollama from "ollama";
+---
 
-const response = await ollama.chat({
-  model: "gemma4",
-  messages: [{ role: "user", content: "Why is the sky blue?" }],
-});
-console.log(response.message.content);
+# Verify the GPU
+
+Check that the GPUs are visible:
+
+```bash
+rocminfo
 ```
 
-## Supported backends
+You should see something similar to:
 
-- [llama.cpp](https://github.com/ggml-org/llama.cpp) project founded by Georgi Gerganov.
+```text
+Name:                    gfx900
+```
 
-## Documentation
+Check the DRM devices:
 
-- [CLI reference](https://docs.ollama.com/cli)
-- [REST API reference](https://docs.ollama.com/api)
-- [Importing models](https://docs.ollama.com/import)
-- [Modelfile reference](https://docs.ollama.com/modelfile)
-- [Building from source](https://github.com/ollama/ollama/blob/main/docs/development.md)
+```bash
+ls -l /dev/dri/
+```
 
-## Community Integrations
+and:
 
-> Want to add your project? Open a pull request.
+```bash
+ls -l /dev/kfd
+```
 
-### Chat Interfaces
+The Ollama service/user needs access to the appropriate `render` and `video` groups.
 
-#### Web
+For example:
 
-- [Open WebUI](https://github.com/open-webui/open-webui) - Extensible, self-hosted AI interface
-- [Onyx](https://github.com/onyx-dot-app/onyx) - Connected AI workspace
-- [LibreChat](https://github.com/danny-avila/LibreChat) - Enhanced ChatGPT clone with multi-provider support
-- [Lobe Chat](https://github.com/lobehub/lobe-chat) - Modern chat framework with plugin ecosystem ([docs](https://lobehub.com/docs/self-hosting/examples/ollama))
-- [NextChat](https://github.com/ChatGPTNextWeb/ChatGPT-Next-Web) - Cross-platform ChatGPT UI ([docs](https://docs.nextchat.dev/models/ollama))
-- [Perplexica](https://github.com/ItzCrazyKns/Perplexica) - AI-powered search engine, open-source Perplexity alternative
-- [big-AGI](https://github.com/enricoros/big-AGI) - AI suite for professionals
-- [Lollms WebUI](https://github.com/ParisNeo/lollms-webui) - Multi-model web interface
-- [ChatOllama](https://github.com/sugarforever/chat-ollama) - Chatbot with knowledge bases
-- [Bionic GPT](https://github.com/bionic-gpt/bionic-gpt) - On-premise AI platform
-- [Chatbot UI](https://github.com/ivanfioravanti/chatbot-ollama) - ChatGPT-style web interface
-- [Hollama](https://github.com/fmaclen/hollama) - Minimal web interface
-- [Chatbox](https://github.com/Bin-Huang/Chatbox) - Desktop and web AI client
-- [chat](https://github.com/swuecho/chat) - Chat web app for teams
-- [Ollama RAG Chatbot](https://github.com/datvodinh/rag-chatbot.git) - Chat with multiple PDFs using RAG
-- [Tkinter-based client](https://github.com/chyok/ollama-gui) - Python desktop client
+```bash
+groups
+```
 
-#### Desktop
+---
 
-- [Dify.AI](https://github.com/langgenius/dify) - LLM app development platform
-- [AnythingLLM](https://github.com/Mintplex-Labs/anything-llm) - All-in-one AI app for Mac, Windows, and Linux
-- [Maid](https://github.com/Mobile-Artificial-Intelligence/maid) - Cross-platform mobile and desktop client
-- [Witsy](https://github.com/nbonamy/witsy) - AI desktop app for Mac, Windows, and Linux
-- [Cherry Studio](https://github.com/kangfenmao/cherry-studio) - Multi-provider desktop client
-- [Ollama App](https://github.com/JHubi1/ollama-app) - Multi-platform client for desktop and mobile
-- [PyGPT](https://github.com/szczyglis-dev/py-gpt) - AI desktop assistant for Linux, Windows, and Mac
-- [Alpaca](https://github.com/Jeffser/Alpaca) - GTK4 client for Linux and macOS
-- [SwiftChat](https://github.com/aws-samples/swift-chat) - Cross-platform including iOS, Android, and Apple Vision Pro
-- [Enchanted](https://github.com/AugustDev/enchanted) - Native macOS and iOS client
-- [RWKV-Runner](https://github.com/josStorer/RWKV-Runner) - Multi-model desktop runner
-- [Ollama Grid Search](https://github.com/dezoito/ollama-grid-search) - Evaluate and compare models
-- [macai](https://github.com/Renset/macai) - macOS client for Ollama and ChatGPT
-- [AI Studio](https://github.com/MindWorkAI/AI-Studio) - Multi-provider desktop IDE
-- [Reins](https://github.com/ibrahimcetin/reins) - Parameter tuning and reasoning model support
-- [ConfiChat](https://github.com/1runeberg/confichat) - Privacy-focused with optional encryption
-- [LLocal.in](https://github.com/kartikm7/llocal) - Electron desktop client
-- [MindMac](https://mindmac.app) - AI chat client for Mac
-- [Msty](https://msty.app) - Multi-model desktop client
-- [BoltAI for Mac](https://boltai.com) - AI chat client for Mac
-- [IntelliBar](https://intellibar.app/) - AI-powered assistant for macOS
-- [Kerlig AI](https://www.kerlig.com/) - AI writing assistant for macOS
-- [Hillnote](https://hillnote.com) - Markdown-first AI workspace
-- [Perfect Memory AI](https://www.perfectmemory.ai/) - Productivity AI personalized by screen and meeting history
+# Build
 
-#### Mobile
+Clone the repository:
 
-- [Ollama Android Chat](https://github.com/sunshine0523/OllamaServer) - One-click Ollama on Android
+```bash
+git clone https://github.com/Sayrin/ollama-vega.git
+cd ollama-vega
+```
 
-> SwiftChat, Enchanted, Maid, Ollama App, Reins, and ConfiChat listed above also support mobile platforms.
+The build script is:
 
-### Code Editors & Development
+```text
+build-ollama.sh
+```
 
-- [Cline](https://github.com/cline/cline) - VS Code extension for multi-file/whole-repo coding
-- [Continue](https://github.com/continuedev/continue) - Open-source AI code assistant for any IDE
-- [Void](https://github.com/voideditor/void) - Open source AI code editor, Cursor alternative
-- [Copilot for Obsidian](https://github.com/logancyang/obsidian-copilot) - AI assistant for Obsidian
-- [twinny](https://github.com/rjmacarthy/twinny) - Copilot and Copilot chat alternative
-- [gptel Emacs client](https://github.com/karthink/gptel) - LLM client for Emacs
-- [Ollama Copilot](https://github.com/bernardo-bruning/ollama-copilot) - Use Ollama as GitHub Copilot
-- [Obsidian Local GPT](https://github.com/pfrankov/obsidian-local-gpt) - Local AI for Obsidian
-- [Ellama Emacs client](https://github.com/s-kostyaev/ellama) - LLM tool for Emacs
-- [orbiton](https://github.com/xyproto/orbiton) - Config-free text editor with Ollama tab completion
-- [AI ST Completion](https://github.com/yaroslavyaroslav/OpenAI-sublime-text) - Sublime Text 4 AI assistant
-- [VT Code](https://github.com/vinhnx/vtcode) - Rust-based terminal coding agent with Tree-sitter
-- [QodeAssist](https://github.com/Palm1r/QodeAssist) - AI coding assistant for Qt Creator
-- [AI Toolkit for VS Code](https://aka.ms/ai-tooklit/ollama-docs) - Microsoft-official VS Code extension
-- [Open Interpreter](https://docs.openinterpreter.com/language-model-setup/local-models/ollama) - Natural language interface for computers
+Make it executable:
 
-### Libraries & SDKs
+```bash
+chmod +x build-ollama.sh
+```
 
-- [LiteLLM](https://github.com/BerriAI/litellm) - Unified API for 100+ LLM providers
-- [Semantic Kernel](https://github.com/microsoft/semantic-kernel/tree/main/python/semantic_kernel/connectors/ai/ollama) - Microsoft AI orchestration SDK
-- [LangChain4j](https://github.com/langchain4j/langchain4j) - Java LangChain ([example](https://github.com/langchain4j/langchain4j-examples/tree/main/ollama-examples/src/main/java))
-- [LangChainGo](https://github.com/tmc/langchaingo/) - Go LangChain ([example](https://github.com/tmc/langchaingo/tree/main/examples/ollama-completion-example))
-- [Spring AI](https://github.com/spring-projects/spring-ai) - Spring framework AI support ([docs](https://docs.spring.io/spring-ai/reference/api/chat/ollama-chat.html))
-- [LangChain](https://python.langchain.com/docs/integrations/chat/ollama/) and [LangChain.js](https://js.langchain.com/docs/integrations/chat/ollama/) with [example](https://js.langchain.com/docs/tutorials/local_rag/)
-- [Ollama for Ruby](https://github.com/crmne/ruby_llm) - Ruby LLM library
-- [any-llm](https://github.com/mozilla-ai/any-llm) - Unified LLM interface by Mozilla
-- [OllamaSharp for .NET](https://github.com/awaescher/OllamaSharp) - .NET SDK
-- [LangChainRust](https://github.com/Abraxas-365/langchain-rust) - Rust LangChain ([example](https://github.com/Abraxas-365/langchain-rust/blob/main/examples/llm_ollama.rs))
-- [Agents-Flex for Java](https://github.com/agents-flex/agents-flex) - Java agent framework ([example](https://github.com/agents-flex/agents-flex/tree/main/agents-flex-llm/agents-flex-llm-ollama/src/test/java/com/agentsflex/llm/ollama))
-- [Elixir LangChain](https://github.com/brainlid/langchain) - Elixir LangChain
-- [Ollama-rs for Rust](https://github.com/pepperoni21/ollama-rs) - Rust SDK
-- [LangChain for .NET](https://github.com/tryAGI/LangChain) - .NET LangChain ([example](https://github.com/tryAGI/LangChain/blob/main/examples/LangChain.Samples.OpenAI/Program.cs))
-- [chromem-go](https://github.com/philippgille/chromem-go) - Go vector database with Ollama embeddings ([example](https://github.com/philippgille/chromem-go/tree/v0.5.0/examples/rag-wikipedia-ollama))
-- [LangChainDart](https://github.com/davidmigloz/langchain_dart) - Dart LangChain
-- [LlmTornado](https://github.com/lofcz/llmtornado) - Unified C# interface for multiple inference APIs
-- [Ollama4j for Java](https://github.com/ollama4j/ollama4j) - Java SDK
-- [Ollama for Laravel](https://github.com/cloudstudio/ollama-laravel) - Laravel integration
-- [Ollama for Swift](https://github.com/mattt/ollama-swift) - Swift SDK
-- [LlamaIndex](https://docs.llamaindex.ai/en/stable/examples/llm/ollama/) and [LlamaIndexTS](https://ts.llamaindex.ai/modules/llms/available_llms/ollama) - Data framework for LLM apps
-- [Haystack](https://github.com/deepset-ai/haystack-integrations/blob/main/integrations/ollama.md) - AI pipeline framework
-- [Firebase Genkit](https://firebase.google.com/docs/genkit/plugins/ollama) - Google AI framework
-- [Ollama-hpp for C++](https://github.com/jmont-dev/ollama-hpp) - C++ SDK
-- [PromptingTools.jl](https://github.com/svilupp/PromptingTools.jl) - Julia LLM toolkit ([example](https://svilupp.github.io/PromptingTools.jl/dev/examples/working_with_ollama))
-- [Ollama for R - rollama](https://github.com/JBGruber/rollama) - R SDK
-- [Portkey](https://portkey.ai/docs/welcome/integration-guides/ollama) - AI gateway
-- [Testcontainers](https://testcontainers.com/modules/ollama/) - Container-based testing
-- [LLPhant](https://github.com/theodo-group/LLPhant?tab=readme-ov-file#ollama) - PHP AI framework
+Then build:
 
-### Frameworks & Agents
+```bash
+./build-ollama.sh
+```
 
-- [AutoGPT](https://github.com/Significant-Gravitas/AutoGPT/blob/master/docs/content/platform/ollama.md) - Autonomous AI agent platform
-- [crewAI](https://github.com/crewAIInc/crewAI) - Multi-agent orchestration framework
-- [Strands Agents](https://github.com/strands-agents/sdk-python) - Model-driven agent building by AWS
-- [Cheshire Cat](https://github.com/cheshire-cat-ai/core) - AI assistant framework
-- [any-agent](https://github.com/mozilla-ai/any-agent) - Unified agent framework interface by Mozilla
-- [Stakpak](https://github.com/stakpak/agent) - Open source DevOps agent
-- [Hexabot](https://github.com/hexastack/hexabot) - Conversational AI builder
-- [Neuro SAN](https://github.com/cognizant-ai-lab/neuro-san-studio) - Multi-agent orchestration ([docs](https://github.com/cognizant-ai-lab/neuro-san-studio/blob/main/docs/user_guide.md#ollama))
+The script configures:
 
-### RAG & Knowledge Bases
+```text
+ROCm:       /opt/rocm-6.1.0
+Backend:    rocm_v7_2
+GPU target: gfx900
+```
 
-- [RAGFlow](https://github.com/infiniflow/ragflow) - RAG engine based on deep document understanding
-- [R2R](https://github.com/SciPhi-AI/R2R) - Open-source RAG engine
-- [MaxKB](https://github.com/1Panel-dev/MaxKB/) - Ready-to-use RAG chatbot
-- [Minima](https://github.com/dmayboroda/minima) - On-premises or fully local RAG
-- [Chipper](https://github.com/TilmanGriesel/chipper) - AI interface with Haystack RAG
-- [ARGO](https://github.com/xark-argo/argo) - RAG and deep research on Mac/Windows/Linux
-- [Archyve](https://github.com/nickthecook/archyve) - RAG-enabling document library
-- [Casibase](https://casibase.org) - AI knowledge base with RAG and SSO
-- [BrainSoup](https://www.nurgo-software.com/products/brainsoup) - Native client with RAG and multi-agent automation
+The build uses the AMD HIP compiler and explicitly targets:
 
-### Bots & Messaging
+```text
+gfx900
+```
 
-- [LangBot](https://github.com/RockChinQ/LangBot) - Multi-platform messaging bots with agents and RAG
-- [AstrBot](https://github.com/Soulter/AstrBot/) - Multi-platform chatbot with RAG and plugins
-- [Discord-Ollama Chat Bot](https://github.com/kevinthedang/discord-ollama) - TypeScript Discord bot
-- [Ollama Telegram Bot](https://github.com/ruecat/ollama-telegram) - Telegram bot
-- [LLM Telegram Bot](https://github.com/innightwolfsleep/llm_telegram_bot) - Telegram bot for roleplay
+---
 
-### Terminal & CLI
+# Build output
 
-- [aichat](https://github.com/sigoden/aichat) - All-in-one LLM CLI with Shell Assistant, RAG, and AI tools
-- [oterm](https://github.com/ggozad/oterm) - Terminal client for Ollama
-- [gollama](https://github.com/sammcj/gollama) - Go-based model manager for Ollama
-- [tlm](https://github.com/yusufcanb/tlm) - Local shell copilot
-- [tenere](https://github.com/pythops/tenere) - TUI for LLMs
-- [ParLlama](https://github.com/paulrobello/parllama) - TUI for Ollama
-- [llm-ollama](https://github.com/taketwo/llm-ollama) - Plugin for [Datasette's LLM CLI](https://llm.datasette.io/en/stable/)
-- [ShellOracle](https://github.com/djcopley/ShellOracle) - Shell command suggestions
-- [LLM-X](https://github.com/mrdjohnson/llm-x) - Progressive web app for LLMs
-- [cmdh](https://github.com/pgibler/cmdh) - Natural language to shell commands
-- [VT](https://github.com/vinhnx/vt.ai) - Minimal multimodal AI chat app
+After a successful build:
 
-### Productivity & Apps
+```text
+build/lib/ollama/llama-server
+```
 
-- [AppFlowy](https://github.com/AppFlowy-IO/AppFlowy) - AI collaborative workspace, self-hostable Notion alternative
-- [Screenpipe](https://github.com/mediar-ai/screenpipe) - 24/7 screen and mic recording with AI-powered search
-- [Vibe](https://github.com/thewh1teagle/vibe) - Transcribe and analyze meetings
-- [Page Assist](https://github.com/n4ze3m/page-assist) - Chrome extension for AI-powered browsing
-- [NativeMind](https://github.com/NativeMindBrowser/NativeMindExtension) - Private, on-device browser AI assistant
-- [Ollama Fortress](https://github.com/ParisNeo/ollama_proxy_server) - Security proxy for Ollama
-- [1Panel](https://github.com/1Panel-dev/1Panel/) - Web-based Linux server management
-- [Writeopia](https://github.com/Writeopia/Writeopia) - Text editor with Ollama integration
-- [QA-Pilot](https://github.com/reid41/QA-Pilot) - GitHub code repository understanding
-- [Raycast extension](https://github.com/MassimilianoPasquini97/raycast_ollama) - Ollama in Raycast
-- [Painting Droid](https://github.com/mateuszmigas/painting-droid) - Painting app with AI integrations
-- [Serene Pub](https://github.com/doolijb/serene-pub) - AI roleplaying app
-- [Mayan EDMS](https://gitlab.com/mayan-edms/mayan-edms) - Document management with Ollama workflows
-- [TagSpaces](https://www.tagspaces.org) - File management with [AI tagging](https://docs.tagspaces.org/ai/)
+and:
 
-### Observability & Monitoring
+```text
+build/lib/ollama/rocm_v7_2/libggml-hip.so
+```
 
-- [Opik](https://www.comet.com/docs/opik/cookbook/ollama) - Debug, evaluate, and monitor LLM applications
-- [OpenLIT](https://github.com/openlit/openlit) - OpenTelemetry-native monitoring for Ollama and GPUs
-- [Lunary](https://lunary.ai/docs/integrations/ollama) - LLM observability with analytics and PII masking
-- [Langfuse](https://langfuse.com/docs/integrations/ollama) - Open source LLM observability
-- [HoneyHive](https://docs.honeyhive.ai/integrations/ollama) - AI observability and evaluation for agents
-- [MLflow Tracing](https://mlflow.org/docs/latest/llms/tracing/index.html#automatic-tracing) - Open source LLM observability
+are available.
 
-### Database & Embeddings
+The custom `llama-server` can be started directly without replacing the system Ollama installation.
 
-- [pgai](https://github.com/timescale/pgai) - PostgreSQL as a vector database ([guide](https://github.com/timescale/pgai/blob/main/docs/vectorizer-quick-start.md))
-- [MindsDB](https://github.com/mindsdb/mindsdb/blob/staging/mindsdb/integrations/handlers/ollama_handler/README.md) - Connect Ollama with 200+ data platforms
-- [chromem-go](https://github.com/philippgille/chromem-go/blob/v0.5.0/embed_ollama.go) - Embeddable vector database for Go ([example](https://github.com/philippgille/chromem-go/tree/v0.5.0/examples/rag-wikipedia-ollama))
-- [Kangaroo](https://github.com/dbkangaroo/kangaroo) - AI-powered SQL client
+---
 
-### Infrastructure & Deployment
+# Running llama-server
 
-#### Cloud
+Example for one Vega GPU:
 
-- [Google Cloud](https://cloud.google.com/run/docs/tutorials/gpu-gemma2-with-ollama)
-- [Fly.io](https://fly.io/docs/python/do-more/add-ollama/)
-- [Koyeb](https://www.koyeb.com/deploy/ollama)
-- [Harbor](https://github.com/av/harbor) - Containerized LLM toolkit with Ollama as default backend
+```bash
+cd build/lib/ollama
 
-#### Package Managers
+GGML_BACKEND_PATH=$PWD/rocm_v7_2/libggml-hip.so \
+LD_LIBRARY_PATH=$PWD:$PWD/rocm_v7_2 \
+./llama-server \
+  -m /path/to/model.gguf \
+  --host 127.0.0.1 \
+  --port 8080 \
+  -c 2048 \
+  -ngl all \
+  -dev ROCm0 \
+  -sm none
+```
 
-- [Pacman](https://archlinux.org/packages/extra/x86_64/ollama/)
-- [Homebrew](https://formulae.brew.sh/formula/ollama)
-- [Nix package](https://search.nixos.org/packages?show=ollama&from=0&size=50&sort=relevance&type=packages&query=ollama)
-- [Helm Chart](https://artifacthub.io/packages/helm/ollama-helm/ollama)
-- [Gentoo](https://github.com/gentoo/guru/tree/master/app-misc/ollama)
-- [Flox](https://flox.dev/blog/ollama-part-one)
-- [Guix channel](https://codeberg.org/tusharhero/ollama-guix)
+For two Vega GPUs:
+
+```bash
+cd build/lib/ollama
+
+GGML_BACKEND_PATH=$PWD/rocm_v7_2/libggml-hip.so \
+LD_LIBRARY_PATH=$PWD:$PWD/rocm_v7_2 \
+./llama-server \
+  -m /path/to/model.gguf \
+  --host 127.0.0.1 \
+  --port 8080 \
+  -c 2048 \
+  -ngl all \
+  -dev ROCm0,ROCm1 \
+  -sm layer \
+  -ts 1,1
+```
+
+`-ts` controls the tensor split between the GPUs.
+
+For example:
+
+```text
+-ts 1,1
+```
+
+splits the model approximately evenly.
+
+Other ratios can be tested:
+
+```text
+-ts 3,2
+```
+
+---
+
+# Multi-GPU support
+
+Two Vega 56 GPUs can be used simultaneously.
+
+The tested configuration:
+
+```text
+ROCm0 + ROCm1
+```
+
+with:
+
+```text
+-sm layer
+```
+
+successfully performs layer splitting across both GPUs.
+
+This makes models possible that cannot fit into a single 8 GB Vega GPU.
+
+---
+
+# Tested models
+
+## Qwen2.5-Coder 7B
+
+The Q4_K_M version runs successfully on a single Vega 56.
+
+Test result:
+
+```text
+Prompt:     ~84.6 tokens/s
+Generation: ~39.4 tokens/s
+```
+
+Using both GPUs:
+
+```text
+Prompt:     ~47.9 tokens/s
+Generation: ~21.5 tokens/s
+```
+
+The dual-GPU configuration is therefore not necessarily faster for models that already fit on one GPU.
+
+The main advantage is increased available VRAM.
+
+---
+
+## Qwen2.5-Coder 14B
+
+The 14B Q4_K_M model does not fit on a single 8 GB Vega 56.
+
+Single GPU:
+
+```text
+cudaMalloc failed: out of memory
+```
+
+Using both GPUs:
+
+```text
+-ts 1,1
+```
+
+successfully loads and runs the model.
+
+Test result:
+
+```text
+Prompt:     ~37.6 tokens/s
+Generation: ~14.2 tokens/s
+```
+
+A different split was also tested:
+
+```text
+-ts 3,2
+```
+
+with approximately:
+
+```text
+Prompt:     ~37.1 tokens/s
+Generation: ~14.3 tokens/s
+```
+
+---
+
+## Qwen 27B
+
+A Qwen 27B Q4_K_M model can be loaded across both Vega 56 GPUs.
+
+However, the current configuration is extremely close to the available VRAM limit.
+
+The model can reach:
+
+```text
+model loaded
+listening on http://127.0.0.1:8080
+```
+
+with approximately:
+
+```text
+GPU 0: ~8011 MiB / 8176 MiB
+GPU 1: ~8131 MiB / 8176 MiB
+```
+
+At this point there is almost no free VRAM remaining.
+
+The first inference currently fails with:
+
+```text
+ROCm error: out of memory
+```
+
+Therefore:
+
+> **27B loading works, but 27B inference is currently not working with the present full-GPU configuration.**
+
+The next area of investigation is reducing the number of GPU-resident layers and/or optimizing temporary VRAM usage.
+
+---
+
+# VRAM monitoring
+
+Linux DRM provides useful VRAM information for the Vega GPUs.
+
+Check current usage:
+
+```bash
+for c in /sys/class/drm/card0 /sys/class/drm/card1; do
+    used=$(cat $c/device/mem_info_vram_used)
+    total=$(cat $c/device/mem_info_vram_total)
+
+    echo "$(basename $c): Used $((used/1024/1024)) MiB / Total $((total/1024/1024)) MiB"
+done
+```
+
+Example:
+
+```text
+card0: Used 2500 MiB / Total 8176 MiB
+card1: Used 2670 MiB / Total 8176 MiB
+```
+
+For continuous monitoring:
+
+```bash
+watch -n 1 '
+for c in /sys/class/drm/card0 /sys/class/drm/card1; do
+    used=$(cat $c/device/mem_info_vram_used)
+    total=$(cat $c/device/mem_info_vram_total)
+
+    echo "$(basename $c): Used $((used/1024/1024)) MiB / $((total/1024/1024)) MiB"
+done
+'
+```
+
+---
+
+# Important: do not replace the system Ollama
+
+This project can be tested independently of an existing Ollama installation.
+
+The recommended approach is to leave the production installation untouched and run the custom `llama-server` directly.
+
+For example:
+
+```text
+/usr/local/bin/ollama
+```
+
+can remain unchanged while the custom build is tested from:
+
+```text
+build/lib/ollama/llama-server
+```
+
+This makes it possible to compare the custom Vega build with the standard Ollama installation.
+
+---
+
+# Architecture
+
+The Vega 56 is based on AMD's Vega 10 architecture:
+
+```text
+GPU
+└── Vega 10
+    └── gfx900
+```
+
+The build therefore explicitly targets:
+
+```text
+AMDGPU_TARGETS=gfx900
+```
+
+---
+
+# Current limitations
+
+This project is experimental.
+
+Known limitations include:
+
+* Vega/gfx900 is an older architecture.
+* Modern ROCm versions have reduced support for older GPUs.
+* `hipMemGetInfo()` is unreliable on the tested Vega/ROCm configuration.
+* The custom VRAM detection uses Linux DRM sysfs.
+* 8 GB VRAM per GPU is a significant limitation for larger models.
+* Multi-GPU inference increases usable model capacity but does not necessarily increase performance.
+* Large models may fail during inference because temporary buffers require additional VRAM.
+* The current 27B configuration can load the model but still runs out of VRAM during inference.
+
+---
+
+# Tested configuration
+
+The primary test system:
+
+```text
+CPU:
+    Intel Core i5-7600K
+
+GPU:
+    2× ASRock Phantom Gaming X Radeon RX Vega 56
+    8 GB VRAM each
+    gfx900
+
+OS:
+    Ubuntu 20.04.6 LTS
+
+Kernel:
+    5.4.0-216-generic
+
+ROCm:
+    6.1.0
+
+HIP:
+    6.1.40091
+
+Clang:
+    AMD clang 17
+
+Go:
+    1.26.0
+
+CMake:
+    3.31.10
+
+Ollama:
+    v0.34.2
+```
+
+---
+
+# Project status
+
+Current status:
+
+```text
+Vega gfx900 detection        ✓
+ROCm/HIP backend              ✓
+Vega VRAM workaround          ✓
+Single Vega GPU inference     ✓
+Dual Vega GPU inference       ✓
+7B models                     ✓
+14B models                    ✓
+27B model loading             ✓
+27B inference                 ✗ VRAM limit
+```
+
+The goal of this project is to keep older AMD Vega hardware useful for local AI workloads despite its limited support in newer ROCm/Ollama releases.
+
+---
+
+# Disclaimer
+
+This is an experimental compatibility project.
+
+Performance, stability and compatibility may vary depending on:
+
+* ROCm version
+* Linux kernel
+* AMDGPU driver
+* GPU firmware
+* model architecture
+* quantization
+* context size
+* number of GPUs
+* available VRAM
+
+Use the standard Ollama project for officially supported hardware and configurations.
+
+---
+
+## License
+
+This project is based on Ollama.
+
+See the upstream project for the applicable license and notices.
